@@ -130,7 +130,7 @@ def generate_main_html(output_dir='./', html=False):
     doujinshi_dirs = next(os.walk('.'))[1]
 
     for folder in doujinshi_dirs:
-        if html is True:
+        if html is True and folder[0] == '[':
             class Foo:
                 pass
             foo = Foo()
