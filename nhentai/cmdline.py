@@ -31,7 +31,7 @@ def banner():
  _ __ | | | | ___ _ __ | |_ __ _(_)
 | '_ \| |_| |/ _ \ '_ \| __/ _` | |
 | | | |  _  |  __/ | | | || (_| | |
-|_| |_|_| |_|\___|_| |_|\__\__,_|_|
+|_| |_|_| |_|\___|_| |_|\__\__,_|_| _ symant233 
 ''' % __version__)
 
 
@@ -99,13 +99,16 @@ def cmd_parser():
 
     args, _ = parser.parse_args(sys.argv[1:])
 
-    if args.html_viewer:
+    if args.html_viewer and not args.main_viewer:
         generate_html()
         exit(0)
 
     if args.main_viewer and not args.id and not args.keyword and \
             not args.tag and not args.favorites:
-        generate_main_html()
+        if args.html_viewer:
+            generate_main_html(html=True)
+        else:
+            generate_main_html(html=False)
         exit(0)
 
     if os.path.exists(os.path.join(constant.NHENTAI_HOME, 'cookie')):

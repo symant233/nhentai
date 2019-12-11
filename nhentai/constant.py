@@ -1,7 +1,6 @@
 # coding: utf-8
 from __future__ import unicode_literals, print_function
 import os
-import tempfile
 
 try:
     from urlparse import urlparse
@@ -26,7 +25,7 @@ FAV_URL = '%s/favorites/' % BASE_URL
 u = urlparse(BASE_URL)
 IMAGE_URL = '%s://i.%s/galleries' % (u.scheme, u.hostname)
 
-NHENTAI_HOME = os.path.join(os.getenv('HOME', tempfile.gettempdir()), '.nhentai')
+NHENTAI_HOME = os.path.join(os.getenv('HOME'), '.nhentai')
 
 PROXY = {}
 

@@ -105,7 +105,7 @@ def generate_html(output_dir='.', doujinshi_obj=None):
         logger.warning('Writen HTML Viewer failed ({})'.format(str(e)))
 
 
-def generate_main_html(output_dir='./'):
+def generate_main_html(output_dir='./', html=False):
     """
     Generate a main html to show all the contain doujinshi.
     With a link to their `index.html`.
@@ -130,6 +130,13 @@ def generate_main_html(output_dir='./'):
     doujinshi_dirs = next(os.walk('.'))[1]
 
     for folder in doujinshi_dirs:
+        if html is True:
+            class Foo:
+                pass
+            foo = Foo()
+            foo.name = folder
+            foo.filename = folder
+            generate_html(doujinshi_obj=foo)
 
         files = os.listdir(folder)
         files.sort()
