@@ -8,16 +8,19 @@ import string
 import zipfile
 import shutil
 import requests
+import sqlite3
+import img2pdf
 
 from nhentai import constant
 from nhentai.logger import logger
+from nhentai.serializer import serialize_json, serialize_comicxml, set_js_database
 
 
 def request(method, url, **kwargs):
     session = requests.Session()
     session.headers.update({
         'Referer': constant.LOGIN_URL,
-        'User-Agent': 'nhentai command line client (https://github.com/RicterZ/nhentai)',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Safari/537.36',
         'Cookie': constant.COOKIE
     })
     return getattr(session, method)(url, proxies=constant.PROXY, verify=False, **kwargs)
@@ -79,19 +82,19 @@ def generate_html(output_dir='.', doujinshi_obj=None):
 
         image_html += '<img src="{0}" class="image-item"/>\n'\
             .format(image)
-
     html = readfile('viewer/index.html')
     css = readfile('viewer/styles.css')
     js = readfile('viewer/scripts.js')
 
     if doujinshi_obj is not None:
-        title = doujinshi_obj.name
+        serialize_json(doujinshi_obj, doujinshi_dir)
+        name = doujinshi_obj.name
         if sys.version_info < (3, 0):
-            title = title.encode('utf-8')
+            name = doujinshi_obj.name.encode('utf-8')
     else:
-        title = 'nHentai HTML Viewer'
+        name = {'title': 'nHentai HTML Viewer'}
 
-    data = html.format(TITLE=title, IMAGES=image_html, SCRIPTS=js, STYLES=css)
+    data = html.format(TITLE=name, IMAGES=image_html, SCRIPTS=js, STYLES=css)
     try:
         if sys.version_info < (3, 0):
             with open(os.path.join(doujinshi_dir, 'index.html'), 'w') as f:
@@ -100,9 +103,9 @@ def generate_html(output_dir='.', doujinshi_obj=None):
             with open(os.path.join(doujinshi_dir, 'index.html'), 'wb') as f:
                 f.write(data.encode('utf-8'))
 
-        logger.log(15, 'HTML Viewer has been write to \'{0}\''.format(os.path.join(doujinshi_dir, 'index.html')))
+        logger.log(15, 'HTML Viewer has been written to \'{0}\''.format(os.path.join(doujinshi_dir, 'index.html')))
     except Exception as e:
-        logger.warning('Writen HTML Viewer failed ({})'.format(str(e)))
+        logger.warning('Writing HTML Viewer failed ({})'.format(str(e)))
 
 
 def generate_main_html(output_dir='./', html=False):
@@ -112,10 +115,12 @@ def generate_main_html(output_dir='./', html=False):
     Default output folder will be the CLI path.
     """
 
-    count = 0
     image_html = ''
+
     main = readfile('viewer/main.html')
     css = readfile('viewer/main.css')
+    js = readfile('viewer/main.js')
+
     element = '\n\
             <div class="gallery-favorite">\n\
                 <div class="gallery">\n\
@@ -142,7 +147,6 @@ def generate_main_html(output_dir='./', html=False):
         files.sort()
 
         if 'index.html' in files:
-            count += 1
             logger.info('Add doujinshi \'{}\''.format(folder))
         else:
             continue
@@ -154,27 +158,30 @@ def generate_main_html(output_dir='./', html=False):
             title = 'nHentai HTML Viewer'
 
         image_html += element.format(FOLDER=folder, IMAGE=image, TITLE=title)
-
     if image_html == '':
-        logger.warning('None index.html found, --gen-main paused.')
+        logger.warning('No index.html found, --gen-main paused.')
         return
     try:
-        data = main.format(STYLES=css, COUNT=count, PICTURE=image_html)
+        data = main.format(STYLES=css, SCRIPTS=js, PICTURE=image_html)
         if sys.version_info < (3, 0):
             with open('./main.html', 'w') as f:
                 f.write(data)
         else:
             with open('./main.html', 'wb') as f:
                 f.write(data.encode('utf-8'))
+        shutil.copy(os.path.dirname(__file__)+'/viewer/logo.png', './')
+        set_js_database()
         logger.log(
-            15, 'Main Viewer has been write to \'{0}main.html\''.format(output_dir))
+            15, 'Main Viewer has been written to \'{0}main.html\''.format(output_dir))
     except Exception as e:
-        logger.warning('Writen Main Viewer failed ({})'.format(str(e)))
+        logger.warning('Writing Main Viewer failed ({})'.format(str(e)))
 
 
-def generate_cbz(output_dir='.', doujinshi_obj=None, rm_origin_dir=False):
+def generate_cbz(output_dir='.', doujinshi_obj=None, rm_origin_dir=False, write_comic_info=False):
     if doujinshi_obj is not None:
         doujinshi_dir = os.path.join(output_dir, doujinshi_obj.filename)
+        if write_comic_info:
+            serialize_comicxml(doujinshi_obj, doujinshi_dir)
         cbz_filename = os.path.join(os.path.join(doujinshi_dir, '..'), '{}.cbz'.format(doujinshi_obj.filename))
     else:
         cbz_filename = './doujinshi.cbz'
@@ -192,7 +199,35 @@ def generate_cbz(output_dir='.', doujinshi_obj=None, rm_origin_dir=False):
     if rm_origin_dir:
         shutil.rmtree(doujinshi_dir, ignore_errors=True)
 
-    logger.log(15, 'Comic Book CBZ file has been write to \'{0}\''.format(doujinshi_dir))
+    logger.log(15, 'Comic Book CBZ file has been written to \'{0}\''.format(doujinshi_dir))
+
+
+def generate_pdf(output_dir='.', doujinshi_obj=None, rm_origin_dir=False):
+    """Write images to a PDF file using img2pdf."""
+    if doujinshi_obj is not None:
+        doujinshi_dir = os.path.join(output_dir, doujinshi_obj.filename)
+        pdf_filename = os.path.join(
+            os.path.join(doujinshi_dir, '..'),
+            '{}.pdf'.format(doujinshi_obj.filename)
+        )
+    else:
+        pdf_filename = './doujinshi.pdf'
+        doujinshi_dir = '.'
+
+    file_list = os.listdir(doujinshi_dir)
+    file_list.sort()
+
+    logger.info('Writing PDF file to path: {}'.format(pdf_filename))
+    with open(pdf_filename, 'wb') as pdf_f:
+        full_path_list = (
+            [os.path.join(doujinshi_dir, image) for image in file_list]
+        )
+        pdf_f.write(img2pdf.convert(full_path_list))
+
+    if rm_origin_dir:
+        shutil.rmtree(doujinshi_dir, ignore_errors=True)
+
+    logger.log(15, 'PDF file has been written to \'{0}\''.format(doujinshi_dir))
 
 
 def format_filename(s):
@@ -206,11 +241,46 @@ and append a file extension like '.txt', so I avoid the potential of using
 an invalid filename.
 
 """
+    return s
+
+    # maybe you can use `--format` to select a suitable filename
     valid_chars = "-_.()[] %s%s" % (string.ascii_letters, string.digits)
     filename = ''.join(c for c in s if c in valid_chars)
     if len(filename) > 100:
         filename = filename[:100] + '...]'
 
     # Remove [] from filename
-    filename = filename.replace('[]', '')
+    filename = filename.replace('[]', '').strip()
     return filename
+
+
+def signal_handler(signal, frame):
+    logger.error('Ctrl-C signal received. Stopping...')
+    exit(1)
+
+
+class DB(object):
+    conn = None
+    cur = None
+
+    def __enter__(self):
+        self.conn = sqlite3.connect(constant.NHENTAI_HISTORY)
+        self.cur = self.conn.cursor()
+        self.cur.execute('CREATE TABLE IF NOT EXISTS download_history (id text)')
+        self.conn.commit()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.conn.close()
+
+    def clean_all(self):
+        self.cur.execute('DELETE FROM download_history WHERE 1')
+        self.conn.commit()
+
+    def add_one(self, data):
+        self.cur.execute('INSERT INTO download_history VALUES (?)', [data])
+        self.conn.commit()
+
+    def get_all(self):
+        data = self.cur.execute('SELECT id FROM download_history')
+        return [i[0] for i in data]

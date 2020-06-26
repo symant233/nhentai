@@ -3,20 +3,16 @@ os:
 
 language: python
 python:
-    - 2.7
-    - 3.6
-    - 3.5
-    - 3.4
+    - 3.7
 
 install:
     - python setup.py install
 
 script:
     - echo 268642 > /tmp/test.txt
-    - nhentai --cookie "csrftoken=3c4Mzn4f6NAI1awFqfIh495G3pv5Wade9n63Kx03mkSac8c2QR5vRR4jCwVzb3OR; sessionid=m034e2dyyxgbl9s07hbzgfhvadbap2tk"
+    - nhentai --cookie "_ga=GA1.2.2000087053.1558179358; __cfduid=d8930f7b43d04e1b2117719e28386b2e31593148489; csrftoken=3914GQGSmmqQyfQTBswNgfXuhFiefu8sAgOnsfZWiiqS4PJpKivuTp34p2USV6xu; sessionid=be0w2lwlprlmld3ahg9i592ipsuaw840"
     - nhentai --search umaru
     - nhentai --id=152503,146134 -t 10 --output=/tmp/ --cbz
-    - nhentai --tag lolicon
     - nhentai -F
     - nhentai --file /tmp/test.txt
     - nhentai --id=152503,146134 --gen-main --output=/tmp/

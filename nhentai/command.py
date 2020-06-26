@@ -6,12 +6,12 @@ import platform
 import time
 
 from nhentai.cmdline import cmd_parser, banner
-from nhentai.parser import doujinshi_parser, search_parser, print_doujinshi, favorites_parser, tag_parser, login
+from nhentai.parser import doujinshi_parser, search_parser, print_doujinshi, favorites_parser
 from nhentai.doujinshi import Doujinshi
 from nhentai.downloader import Downloader
 from nhentai.logger import logger
 from nhentai.constant import BASE_URL
-from nhentai.utils import generate_html, generate_cbz, generate_main_html, check_cookie
+from nhentai.utils import generate_html, generate_cbz, generate_main_html, generate_pdf, check_cookie, signal_handler, DB
 
 
 def main():
@@ -19,14 +19,15 @@ def main():
     options = cmd_parser()
     logger.info('Using mirror: {0}'.format(BASE_URL))
 
-    from nhentai.constant import PROXY 
+    from nhentai.constant import PROXY
     # constant.PROXY will be changed after cmd_parser()
-    if PROXY != {}:
+    if PROXY:
         logger.info('Using proxy: {0}'.format(PROXY))
 
     # check your cookie
     check_cookie()
 
+    doujinshis = []
     doujinshi_ids = []
     doujinshi_list = []
 
@@ -34,46 +35,63 @@ def main():
         if not options.is_download:
             logger.warning('You do not specify --download option')
 
-        doujinshis = favorites_parser()
-        print_doujinshi(doujinshis)
-        if options.is_download and doujinshis:
-            doujinshi_ids = map(lambda d: d['id'], doujinshis)
-
-    elif options.tag:
-        doujinshis = tag_parser(options.tag, max_page=options.max_page)
-        print_doujinshi(doujinshis)
-        if options.is_download and doujinshis:
-            doujinshi_ids = map(lambda d: d['id'], doujinshis)
+        doujinshis = favorites_parser(options.page_range)
 
     elif options.keyword:
-        doujinshis = search_parser(options.keyword, options.page)
-        print_doujinshi(doujinshis)
-        if options.is_download:
-            doujinshi_ids = map(lambda d: d['id'], doujinshis)
+        from nhentai.constant import LANGUAGE
+        if LANGUAGE:
+            logger.info('Using deafult language: {0}'.format(LANGUAGE))
+            options.keyword += ', language:{}'.format(LANGUAGE)
+        doujinshis = search_parser(options.keyword, sorting=options.sorting, page=options.page)
 
     elif not doujinshi_ids:
         doujinshi_ids = options.id
 
+    print_doujinshi(doujinshis)
+    if options.is_download and doujinshis:
+        doujinshi_ids = [i['id'] for i in doujinshis]
+
+        if options.is_save_download_history:
+            with DB() as db:
+                data = set(db.get_all())
+
+            doujinshi_ids = list(set(doujinshi_ids) - data)
+
     if doujinshi_ids:
-        for id_ in doujinshi_ids:
+        for i, id_ in enumerate(doujinshi_ids):
             if options.delay:
                 time.sleep(options.delay)
+
             doujinshi_info = doujinshi_parser(id_)
-            doujinshi_list.append(Doujinshi(name_format=options.name_format, **doujinshi_info))
+
+            if doujinshi_info:
+                doujinshi_list.append(Doujinshi(name_format=options.name_format, **doujinshi_info))
+
+            if (i + 1) % 10 == 0:
+                logger.info('Progress: %d / %d' % (i + 1, len(doujinshi_ids)))
 
     if not options.is_show:
-        downloader = Downloader(path=options.output_dir,
-                                thread=options.threads, timeout=options.timeout, delay=options.delay)
+        downloader = Downloader(path=options.output_dir, size=options.threads,
+                                timeout=options.timeout, delay=options.delay)
 
         for doujinshi in doujinshi_list:
+
             doujinshi.downloader = downloader
             doujinshi.download()
-            if not options.is_nohtml and not options.is_cbz:
+            if options.is_save_download_history:
+                with DB() as db:
+                    db.add_one(doujinshi.id)
+
+            if not options.is_nohtml and not options.is_cbz and not options.is_pdf:
                 generate_html(options.output_dir, doujinshi)
             elif options.is_cbz:
                 generate_cbz(options.output_dir, doujinshi, options.rm_origin_dir)
+            elif options.is_pdf:
+                generate_pdf(options.output_dir, doujinshi, options.rm_origin_dir)
+
         if options.main_viewer:
             generate_main_html(options.output_dir)
+
         if not platform.system() == 'Windows':
             logger.log(15, '🍻 All done.')
         else:
@@ -81,11 +99,6 @@ def main():
 
     else:
         [doujinshi.show() for doujinshi in doujinshi_list]
-
-
-def signal_handler(signal, frame):
-    logger.error('Ctrl-C signal received. Stopping...')
-    exit(1)
 
 
 signal.signal(signal.SIGINT, signal_handler)

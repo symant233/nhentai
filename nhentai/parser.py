@@ -1,10 +1,9 @@
 # coding: utf-8
 from __future__ import unicode_literals, print_function
 
+import sys
 import os
 import re
-import threadpool
-import requests
 import time
 from bs4 import BeautifulSoup
 from tabulate import tabulate
@@ -65,7 +64,7 @@ def _get_title_and_id(response):
     return result
 
 
-def favorites_parser():
+def favorites_parser(page_range=''):
     result = []
     html = BeautifulSoup(request('get', constant.FAV_URL).content, 'html.parser')
     count = html.find('span', attrs={'class': 'count'})
@@ -89,7 +88,12 @@ def favorites_parser():
     if os.getenv('DEBUG'):
         pages = 1
 
-    for page in range(1, pages + 1):
+    page_range_list = range(1, pages + 1)
+    if page_range:
+        logger.info('page range is {0}'.format(page_range))
+        page_range_list = page_range_parser(page_range, pages)
+
+    for page in page_range_list:
         try:
             logger.info('Getting doujinshi ids of page %d' % page)
             resp = request('get', constant.FAV_URL + '?page=%d' % page).content
@@ -99,6 +103,32 @@ def favorites_parser():
             logger.error('Error: %s, continue', str(e))
 
     return result
+
+
+def page_range_parser(page_range, max_page_num):
+    pages = set()
+    ranges = str.split(page_range, ',')
+    for range_str in ranges:
+        idx = range_str.find('-')
+        if idx == -1:
+            try:
+                page = int(range_str)
+                if page <= max_page_num:
+                    pages.add(page)
+            except ValueError:
+                logger.error('page range({0}) is not valid'.format(page_range))
+        else:
+            try:
+                left = int(range_str[:idx])
+                right = int(range_str[idx + 1:])
+                if right > max_page_num:
+                    right = max_page_num
+                for page in range(left, right + 1):
+                    pages.add(page)
+            except ValueError:
+                logger.error('page range({0}) is not valid'.format(page_range))
+
+    return list(pages)
 
 
 def doujinshi_parser(id_):
@@ -113,7 +143,7 @@ def doujinshi_parser(id_):
 
     try:
         response = request('get', url)
-        if response.status_code in (200, ):
+        if response.status_code in (200,):
             response = response.content
         else:
             logger.debug('Slow down and retry ({}) ...'.format(id_))
@@ -121,8 +151,8 @@ def doujinshi_parser(id_):
             return doujinshi_parser(str(id_))
 
     except Exception as e:
-        logger.critical(str(e))
-        raise SystemExit
+        logger.warn('Error: {}, ignored'.format(str(e)))
+        return None
 
     html = BeautifulSoup(response, 'html.parser')
     doujinshi_info = html.find('div', attrs={'id': 'info'})
@@ -134,7 +164,7 @@ def doujinshi_parser(id_):
     doujinshi['subtitle'] = subtitle.text if subtitle else ''
 
     doujinshi_cover = html.find('div', attrs={'id': 'cover'})
-    img_id = re.search('/galleries/([\d]+)/cover\.(jpg|png)$', doujinshi_cover.a.img.attrs['data-src'])
+    img_id = re.search('/galleries/([\d]+)/cover\.(jpg|png|gif)$', doujinshi_cover.a.img.attrs['data-src'])
 
     ext = []
     for i in html.find_all('div', attrs={'class': 'thumb-container'}):
@@ -149,34 +179,30 @@ def doujinshi_parser(id_):
     doujinshi['ext'] = ext
 
     pages = 0
-    for _ in doujinshi_info.find_all('div', class_=''):
-        pages = re.search('([\d]+) pages', _.text)
-        if pages:
-            pages = pages.group(1)
-            break
+    for _ in doujinshi_info.find_all('div', class_='tag-container field-name'):
+        if re.search('Pages:', _.text):
+            pages = _.find('span', class_='name').string
     doujinshi['pages'] = int(pages)
 
     # gain information of the doujinshi
     information_fields = doujinshi_info.find_all('div', attrs={'class': 'field-name'})
-    needed_fields = ['Characters', 'Artists', 'Languages', 'Tags']
+    needed_fields = ['Characters', 'Artists', 'Languages', 'Tags', 'Parodies', 'Groups', 'Categories']
     for field in information_fields:
         field_name = field.contents[0].strip().strip(':')
         if field_name in needed_fields:
-            data = [sub_field.contents[0].strip() for sub_field in
+            data = [sub_field.find('span', attrs={'class': 'name'}).contents[0].strip() for sub_field in
                     field.find_all('a', attrs={'class': 'tag'})]
             doujinshi[field_name.lower()] = ', '.join(data)
 
+    time_field = doujinshi_info.find('time')
+    if time_field.has_attr('datetime'):
+        doujinshi['date'] = time_field['datetime']
     return doujinshi
 
 
-def search_parser(keyword, page):
+def old_search_parser(keyword, sorting='date', page=1):
     logger.debug('Searching doujinshis of keyword {0}'.format(keyword))
-    try:
-        response = request('get', url=constant.SEARCH_URL, params={'q': keyword, 'page': page}).content
-    except requests.ConnectionError as e:
-        logger.critical(e)
-        logger.warn('If you are in China, please configure the proxy to fu*k GFW.')
-        raise SystemExit
+    response = request('get', url=constant.SEARCH_URL, params={'q': keyword, 'page': page, 'sort': sorting}).content
 
     result = _get_title_and_id(response)
     if not result:
@@ -194,33 +220,15 @@ def print_doujinshi(doujinshi_list):
                 tabulate(tabular_data=doujinshi_list, headers=headers, tablefmt='rst'))
 
 
-def tag_parser(tag_name, max_page=1):
-    result = []
-    tag_name = tag_name.lower()
-    tag_name = tag_name.replace(' ', '-')
-
-    for p in range(1, max_page + 1):
-        logger.debug('Fetching page {0} for doujinshi with tag \'{1}\''.format(p, tag_name))
-        response = request('get', url='%s/%s/?page=%d' % (constant.TAG_URL, tag_name, p)).content
-
-        result += _get_title_and_id(response)
-        if not result:
-            logger.error('Cannot find doujinshi id of tag \'{0}\''.format(tag_name))
-            return
-
-    if not result:
-        logger.warn('No results for tag \'{}\''.format(tag_name))
-
-    return result
-
-
-def __api_suspended_search_parser(keyword, page):
+def search_parser(keyword, sorting, page):
     logger.debug('Searching doujinshis using keywords {0}'.format(keyword))
+    keyword = '+'.join([i.strip().replace(' ', '-').lower() for i in keyword.split(',')])
     result = []
     i = 0
     while i < 5:
         try:
-            response = request('get', url=constant.SEARCH_URL, params={'query': keyword, 'page': page}).json()
+            url = request('get', url=constant.SEARCH_URL, params={'query': keyword, 'page': page, 'sort': sorting}).url
+            response = request('get', url.replace('%2B', '+')).json()
         except Exception as e:
             i += 1
             if not i < 5:
@@ -240,29 +248,6 @@ def __api_suspended_search_parser(keyword, page):
 
     if not result:
         logger.warn('No results for keywords {}'.format(keyword))
-
-    return result
-
-
-def __api_suspended_tag_parser(tag_id, max_page=1):
-    logger.info('Searching for doujinshi with tag id {0}'.format(tag_id))
-    result = []
-    response = request('get', url=constant.TAG_API_URL, params={'sort': 'popular', 'tag_id': tag_id}).json()
-    page = max_page if max_page <= response['num_pages'] else int(response['num_pages'])
-
-    for i in range(1, page + 1):
-        logger.info('Getting page {} ...'.format(i))
-
-        if page != 1:
-            response = request('get', url=constant.TAG_API_URL,
-                               params={'sort': 'popular', 'tag_id': tag_id}).json()
-    for row in response['result']:
-        title = row['title']['english']
-        title = title[:85] + '..' if len(title) > 85 else title
-        result.append({'id': row['id'], 'title': title})
-
-    if not result:
-        logger.warn('No results for tag id {}'.format(tag_id))
 
     return result
 
@@ -291,11 +276,11 @@ def __api_suspended_doujinshi_parser(id_):
     doujinshi['name'] = response['title']['english']
     doujinshi['subtitle'] = response['title']['japanese']
     doujinshi['img_id'] = response['media_id']
-    doujinshi['ext'] = ''.join(map(lambda s: s['t'], response['images']['pages']))
+    doujinshi['ext'] = ''.join([i['t'] for i in response['images']['pages']])
     doujinshi['pages'] = len(response['images']['pages'])
 
     # gain information of the doujinshi
-    needed_fields = ['character', 'artist', 'language', 'tag']
+    needed_fields = ['character', 'artist', 'language', 'tag', 'parody', 'group', 'category']
     for tag in response['tags']:
         tag_type = tag['type']
         if tag_type in needed_fields:
